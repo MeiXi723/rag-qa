@@ -1,0 +1,9 @@
+
+Python 编码规范：使用 4 个空格缩进，每行不超过 120 个字符。
+命名规则：变量用 snake_case，类名用 PascalCase，常量用 UPPER_CASE。
+
+Git 工作流：主分支 main，开发分支 develop，功能分支 feature/xxx。
+提交前需要运行 lint 检查，合并到 main 需要至少一人 Code Review。
+
+API 设计规范：RESTful 风格，URL 用名词复数，错误码见 RFC 7231。
+所有接口需返回统一格式：{"code": 200, "data": ..., "message": ""}
