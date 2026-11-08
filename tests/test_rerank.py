@@ -1,4 +1,13 @@
+import pytest
+
 from app.services.retrieval import rerank
+
+
+@pytest.fixture(autouse=True)
+def _rerank_enabled(monkeypatch):
+    # CI 用 ENABLE_RERANK=false 跳过 sentence-transformers 安装；
+    # 本组测试必须与部署 env 解耦，逐用例显式控制开关（disabled 用例自己会覆写为 False）
+    monkeypatch.setattr(rerank, "ENABLE_RERANK", True)
 
 
 class FakeCrossEncoder:
