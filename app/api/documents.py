@@ -16,12 +16,18 @@ router = APIRouter(prefix="/api/documents", tags=["文档管理 / Document Manag
 
 
 @router.post("/upload", response_model=DocumentResponse)
-async def upload_document(
+def upload_document(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    ext = os.path.splitext(file.filename or "")[1].lower()
+    # filename 来自 multipart、用户可控：剥掉路径分量防穿越（../../、绝对路径、反斜杠变体）
+    raw_name = (file.filename or "").replace("\\", "/").strip()
+    safe_name = os.path.basename(raw_name)
+    if not safe_name or safe_name in {".", ".."}:
+        raise HTTPException(status_code=400, detail="非法文件名")
+
+    ext = os.path.splitext(safe_name)[1].lower()
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
@@ -29,7 +35,7 @@ async def upload_document(
         )
 
     os.makedirs(UPLOAD_DIR, exist_ok=True)
-    file_path = os.path.join(UPLOAD_DIR, file.filename)
+    file_path = os.path.join(UPLOAD_DIR, safe_name)
     with open(file_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
@@ -40,7 +46,7 @@ async def upload_document(
     vs = get_vector_store()
 
     doc = Document(
-        filename=file.filename,
+        filename=safe_name,
         file_type=ext.lstrip("."),
         file_size=os.path.getsize(file_path),
         chunk_count=len(chunks),
@@ -58,7 +64,7 @@ async def upload_document(
             embeddings=[embedding],
             metadatas=[{
                 "document_id": doc.id,
-                "document_name": file.filename,
+                "document_name": safe_name,
                 "chunk_index": i,
                 "page": None
             }]

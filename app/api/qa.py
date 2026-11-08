@@ -12,7 +12,7 @@ router = APIRouter(prefix="/api/qa", tags=["智能问答 / Q&A"])
 
 
 @router.post("/ask", response_model=AskResponse)
-async def ask_question(
+def ask_question(
     req: AskRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),

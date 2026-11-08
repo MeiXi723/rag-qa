@@ -98,6 +98,31 @@ def test_upload_invalid_file(mock_client):
     assert resp.status_code == 400
 
 
+def test_upload_filename_traversal_is_neutralized(mock_client):
+    # D07/D13：multipart filename 用户可控，必须剥路径分量后落盘（安全化而非拒绝）。
+    # 端点用的是 documents 模块的 import 绑定（首次导入冻结），校验要读同一份
+    import app.api.documents as docs_module
+    resp = mock_client.post(
+        "/api/documents/upload",
+        files={"file": (
+            "../../etc/evil.txt",
+            io.BytesIO(b"Python is an interpreted programming language."),
+            "text/plain",
+        )}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["filename"] == "evil.txt"
+    assert os.path.exists(os.path.join(docs_module.UPLOAD_DIR, "evil.txt"))
+
+
+def test_upload_rejects_pure_dotdot_filename(mock_client):
+    resp = mock_client.post(
+        "/api/documents/upload",
+        files={"file": ("..", io.BytesIO(b"x"), "text/plain")},
+    )
+    assert resp.status_code == 400
+
+
 def test_delete_nonexistent_document(mock_client):
     resp = mock_client.delete("/api/documents/nonexistent")
     assert resp.status_code == 404

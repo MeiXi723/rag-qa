@@ -23,6 +23,7 @@ class BM25Index:
     def __init__(self, vector_store):
         self._vs = vector_store
         self._bm25: BM25Okapi | None = None
+        self._records: list[dict] = []
         self._dirty = True
         # 惰性重建用锁保护：FastAPI 多线程并发检索时避免重复重建
         self._lock = threading.Lock()
@@ -35,8 +36,11 @@ class BM25Index:
         with self._lock:
             if not self._dirty:
                 return
-            records = self._vs.records
-            texts = [r.get("text", "") for r in records]
+            # 语料快照：upload/delete 线程可能在检索中途重绑 VectorStore.records
+            # （chroma.py delete 是整体重绑），索引与下标必须来自同一份快照，
+            # 否则并发下错位/越界
+            self._records = list(self._vs.records)
+            texts = [r.get("text", "") for r in self._records]
             # 分词器必须索引与查询一致，否则 BM25 分数没有可比性
             tokenized = [jieba.lcut(t) for t in texts]
             # 全空语料（records 有条目但文本全空）会让 BM25Okapi 除零，必须挡住
@@ -56,7 +60,7 @@ class BM25Index:
             # 分数降序排列，低于阈值后全是更低分，直接停
             if scores[i] <= BM25_SCORE_THRESHOLD or len(results) >= top_n:
                 break
-            record = self._vs.records[i]
+            record = self._records[i]
             results.append({
                 "id": record["id"],
                 "text": record.get("text", ""),
