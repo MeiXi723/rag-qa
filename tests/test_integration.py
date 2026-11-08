@@ -4,25 +4,47 @@ import tempfile
 import pytest
 from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 
 @pytest.fixture
 def mock_client():
+    # engine/SessionLocal 在 database.py 模块导入时就绑定真实路径，
+    # 只 patch config 会被更早导入的其他测试文件破坏——直接替换模块全局
+    import app.db.database as db_module
+    test_engine = create_engine(
+        f"sqlite:///{tempfile.mkdtemp()}/test.db",
+        connect_args={"check_same_thread": False},
+    )
     with patch("app.config.UPLOAD_DIR", tempfile.mkdtemp()), \
          patch("app.config.SQLITE_PATH", os.path.join(tempfile.mkdtemp(), "test.db")), \
-         patch("app.config.CHROMA_PERSIST_DIR", tempfile.mkdtemp()):
+         patch("app.config.CHROMA_PERSIST_DIR", tempfile.mkdtemp()), \
+         patch.object(db_module, "_engine", test_engine), \
+         patch.object(db_module, "_SessionLocal",
+                      sessionmaker(autocommit=False, autoflush=False, bind=test_engine)):
         from app.main import app
         mock_llm = MagicMock()
         mock_llm.embed.return_value = [0.1] * 512
         mock_llm.chat.return_value = "Answer: Python is a programming language."
-        import app.main as am
-        am._llm_service = mock_llm
-        client = TestClient(app)
-        yield client
+        # 单例住在 app.services 命名空间（不是 app.main）——挂错模块 mock 永不生效
+        import app.services as services_module
+        services_module._llm_service = mock_llm
+        # with 块内 lifespan 才会执行（init_db 建表）；受保护接口需 JWT，
+        # 先注册拿 token 再挂到后续请求上（v1 遗留：这些用例曾被 403 拦截）
+        with TestClient(app) as client:
+            reg = client.post(
+                "/api/auth/register",
+                json={"email": "integration@test.dev", "password": "secret6"},
+            )
+            assert reg.status_code == 200, reg.text
+            client.headers.update({"Authorization": f"Bearer {reg.json()['access_token']}"})
+            yield client
         # cleanup
-        am._llm_service = None
-        am._vector_store = None
-        am._db = None
+        services_module._llm_service = None
+        services_module._vector_store = None
+        services_module._bm25_index = None
+        test_engine.dispose()
 
 
 def test_root(mock_client):

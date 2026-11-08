@@ -22,13 +22,13 @@ ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt"}
 def parse_file(file_path: str) -> str:
     """
     把文件解析为纯文本字符串。
-    
+
     【设计思路】
     这是一个"路由器"而不是"处理器"——它根据文件扩展名分发到不同的解析器。
     当前版本直接在函数里写 if-elif，简单但扩展性差。
     如果要支持更多格式（如 .md, .epub, .html），更好的设计是
     策略模式（每个格式一个 Parser 类，注册到一个字典里）。
-    
+
     【每种解析器的底层原理】
     - .txt: 直接读文件，最可靠的方式
     - .pdf: PyPDF2 读取 PDF 内部的 text objects（文字对象）。
@@ -77,48 +77,63 @@ def parse_file(file_path: str) -> str:
 
 def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> list[str]:
     """
-    把一篇文章按固定长度切成多个小块。
-    
-    【当前实现的局限性（这是 RAG 质量的最大瓶颈）】
-    这是最简单的"滑动窗口"切分：
-    - chunk_size=500, overlap=50 意味着：
-      块1: text[0:500]
-      块2: text[450:950]   ← 前 50 个字符和块1 重复
-      块3: text[900:1400]  ← 前 50 个字符和块2 重复
-    
-    问题：
-    1. 按字符数切，不看句子边界 → 可能在句子中间截断
-       "Python是一种解释" 和 "型编程语言" 被切成两块
-    2. overlap 不能真正解决截断问题——它只保证重叠区的字符在两个块里都有，
-       但不保证重叠区正好在句子边界
-    3. 段落的语义边界完全被忽略 —— 一个段落讨论"列表操作"，
-       下一个讨论"字典操作"，但它们在同一个 chunk 里
-    
-    【更好的方案（第二阶段要替换的内容）】
-    - 递归字符分割：先按段落切(\n\n)，超长的再按句号切，再超长的按逗号切
-    - 语义分块：用 embedding 的余弦相似度找话题转折点
-    - 分层块：小块(256)用于检索精准匹配，大块(1024)用于喂给 LLM
-    
+    句界感知分块（v2.0，替代 v1 的纯字符滑窗）。
+
+    【算法】
+    1. 先按句末标点（。！？!?；;和换行）把文本切成句子单元
+    2. 贪心打包：单元依次装入当前块，装不下就开新块
+    3. 新块开头带上一块末尾 overlap 个字符（与 v1 overlap 语义对齐）
+    4. 单句超过 chunk_size（无标点长段/表格流）→ 该单元退回 v1 固定窗口滑切
+
+    好处：绝大多数块不再把句子拦腰截断，"Python是一种解释" / "型编程语言"
+    这种碎片不会再喂给 embedding 和 LLM。
+
     【边界情况】
-    - 空字符串：返回 []（blocks 为空列表）
-    - 短文本（< chunk_size）：返回 [text]（整个文本作为一个块）
-    - 单字：start 每次跳 450 (chunk_size - overlap)，可能产生大量小块
-    - 最后一个块肯定小于 chunk_size，会被 if end > len(text) 的检查截断
+    - 短文本（≤ chunk_size）：返回 [text]，与 v1 一致
+    - overlap ≥ chunk_size：非法参数，防御性收窄为 chunk_size//2（否则窗口不前进）
     """
     if len(text) <= chunk_size:
         return [text]
+    if overlap >= chunk_size or overlap < 0:
+        overlap = chunk_size // 2
 
-    chunks = []
-    start = 0
-    while start < len(text):
-        end = start + chunk_size
-        chunk = text[start:end]
-        chunks.append(chunk)
-        # 下一个块的起点 = 当前起点 + (chunk_size - overlap)
-        # 例：500 - 50 = 450 → 每次前进 450 字符
-        start += (chunk_size - overlap)
-        # 如果起点已经到文本末尾了，停止（防止最后一个块和倒数第二个块重复太多）
-        if start >= len(text):
-            break
+    chunks: list[str] = []
+    for unit in _split_units(text):
+        if len(unit) > chunk_size:
+            chunks.extend(_hard_split(unit, chunk_size, overlap))
+            continue
+        if chunks and len(chunks[-1]) + len(unit) <= chunk_size:
+            chunks[-1] += unit
+            continue
+        tail = chunks[-1][-overlap:] if chunks else ""
+        candidate = tail + unit
+        chunks.append(candidate if len(candidate) <= chunk_size else unit)
 
     return chunks
+
+
+def _split_units(text: str) -> list[str]:
+    """按句末标点切单元，标点保留在单元尾部（切了才知道哪里是句子边界）。"""
+    boundaries = "。！？!?；;\n"
+    units: list[str] = []
+    buf: list[str] = []
+    for ch in text:
+        buf.append(ch)
+        if ch in boundaries:
+            units.append("".join(buf))
+            buf = []
+    if buf:
+        units.append("".join(buf))
+    return [u for u in units if u]
+
+
+def _hard_split(unit: str, chunk_size: int, overlap: int) -> list[str]:
+    """v1 的固定窗口滑切，仅用于超长无标点单元的兜底。"""
+    out = []
+    start = 0
+    while start < len(unit):
+        out.append(unit[start:start + chunk_size])
+        start += chunk_size - overlap
+        if start >= len(unit):
+            break
+    return out

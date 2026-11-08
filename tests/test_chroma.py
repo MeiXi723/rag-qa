@@ -1,4 +1,3 @@
-import os
 import tempfile
 import pytest
 from app.db.chroma import VectorStore

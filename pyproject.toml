@@ -1,0 +1,20 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = [
+    # passlib 1.7.4 探测 bcrypt 版本的方式与 bcrypt 4.x 不兼容，是上游噪音不是我们的问题
+    "ignore:module 'bcrypt' has no attribute '__about__'",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = [".venv", "data", "python-backend", "docs", "tmp"]
+
+[tool.ruff.lint]
+# 只开正确性与告警类规则；import 排序（I）等风格规则不强制，避免与存量代码大量冲突
+select = ["E", "F", "W"]
+
+[tool.ruff.lint.per-file-ignores]
+# FastAPI 惯用模式：先建 app 实例再挂路由，路由 import 必须在 app 创建之后
+"app/main.py" = ["E402"]

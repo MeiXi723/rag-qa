@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.auth import get_current_user
 from app.config import CHUNK_OVERLAP, CHUNK_SIZE, UPLOAD_DIR
 from app.db.database import get_db
-from app.services import get_llm_service, get_vector_store
+from app.services import get_llm_service, get_vector_store, get_bm25_index
 from app.models.db_models import Document, User
 from app.models.schemas import DocumentResponse
 from app.services.document import ALLOWED_EXTENSIONS, chunk_text, parse_file
@@ -64,6 +64,9 @@ async def upload_document(
             }]
         )
 
+    # BM25 语料来自 VectorStore.records，增删文档后必须标脏
+    get_bm25_index().mark_dirty()
+
     return DocumentResponse(
         id=doc.id,
         filename=doc.filename,
@@ -109,5 +112,8 @@ async def delete_document(
     vs.delete_by_document_id(doc_id)
     db.delete(doc)
     db.commit()
+
+    # 同步标记 BM25 语料失效
+    get_bm25_index().mark_dirty()
 
     return {"detail": "已删除"}

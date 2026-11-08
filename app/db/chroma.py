@@ -14,7 +14,7 @@
 # 【核心数据结构】
 # self.index  — FAISS 的 IndexFlatL2 对象，存所有向量
 # self.records — Python list[dict]，存每个向量的元数据（文本、文档名、页码等）
-# 
+#
 # 这两个结构的元素是一一对应的：
 #   self.index  的第 i 个向量
 #   self.records 的第 i 个 dict  ← 描述这个向量的元信息
@@ -29,25 +29,25 @@ import faiss
 class VectorStore:
     """
     自建的向量存储系统。
-    
+
     【为什么不用 Chroma/Milvus/Qdrant 而是自己写？】
     这是教学/原型阶段的选择：
     - FAISS 是 Meta 开源的高性能向量搜索库，核心用 C++ 实现，快
     - 但 FAISS 是库不是数据库：它只管向量搜索，不管 metadata 过滤、持久化、并发
     - 所以需要自己写一层"metadata 管理"（records 列表 + JSON 文件）
     - 生产环境用 Qdrant/Milvus 能省掉这些胶水代码
-    
+
     【persist_dir 和 collection_name】
     persist_dir: 存放索引文件的目录
     collection_name: 索引文件的标识（当前只支持一个 collection）
-    
+
     持久化产生两个文件：
     {persist_dir}/{collection_name}.index       ← FAISS 二进制索引文件
     {persist_dir}/{collection_name}.data.json  ← 元数据 JSON 文件
-    
+
     重启应用时，如果这两个文件存在，会自动加载恢复。
     """
-    
+
     def __init__(self, persist_dir: str, collection_name: str = "documents"):
         # 确保目录存在——如果 data/chroma 不存在就创建
         os.makedirs(persist_dir, exist_ok=True)
@@ -69,15 +69,15 @@ class VectorStore:
     def add(self, ids: list[str], texts: list[str], embeddings: list[list[float]], metadatas: list[dict]):
         """
         向向量库中添加一批文档块。
-        
+
         【参数说明】
         虽然当前业务代码每次只添加 1 个块（循环调用 add），
         但这个方法的签名是批量的——支持一次添加多个块。
-        
+
         【FAISS 的向量格式要求】
         FAISS 要求向量是 numpy float32 数组，形状为 (N, d)，
         其中 N = 向量数量，d = 每个向量的维度。
-        
+
         numpy.array(embeddings) 把 Python list[list[float]] 转为 numpy ndarray，
         .astype("float32") 确保精度匹配（FAISS 内部用 float32 计算）。
         """
@@ -86,7 +86,7 @@ class VectorStore:
         # 第一次添加时，FAISS 索引还不存在 → 创建它
         # IndexFlatL2 是"暴力搜索"索引（Flat = 不压缩，L2 = 欧几里得距离）
         # vectors.shape[1] = 向量的维度（bge-small 是 384）
-        # 
+        #
         # 【为什么用 IndexFlatL2 而不是 HNSW？】
         # - Flat L2 的搜索复杂度是 O(N)（每次都遍历全部向量）
         # - HNSW 可以达到 O(log N)（图结构的近似搜索）
@@ -117,11 +117,11 @@ class VectorStore:
     def search(self, query_embedding: list[float], n_results: int = 3) -> dict:
         """
         搜索与 query 最相似的 n_results 个文档块。
-        
+
         【L2 距离的含义】
         L2 距离 = sqrt(sum((a_i - b_i)^2))，越小表示越相似。
         FAISS 的 IndexFlatL2 返回的就是 L2 距离。
-        
+
         【返回值格式模仿 Chroma API】
         为了和 Chroma 的调用方式兼容（历史原因），返回格式为：
         {
@@ -141,7 +141,7 @@ class VectorStore:
         query = np.array([query_embedding]).astype("float32")
         # k 不能超过索引中的总向量数
         k = min(n_results, self.index.ntotal)
-        
+
         # FAISS 的 search 方法：
         # 输入 query (1, d)，返回 (distances, indices) 两个 (1, k) 数组
         # distances: L2 距离，越近越好
@@ -172,19 +172,19 @@ class VectorStore:
     def delete_by_document_id(self, document_id: str):
         """
         删除属于某个文档的所有向量块。
-        
+
         【这里的性能问题（项目最脆弱的点之一）】
         当前实现：
         1. 遍历所有 records，过滤掉目标 document_id
         2. 如果 records 确实减少了 → 重建整个 FAISS 索引
         3. 保存到磁盘
-        
+
         "_rebuild_index()" 的开销是 O(N*d)，其中 N = 所有向量数，d = 向量维度。
         如果库里有 50000 个向量且每个 384 维：
         - 删除 1 条记录 → 重建 50000*384 的索引
         这显然浪费。更好的做法应该是用"逻辑删除"（标记 deleted=True），
         隔一段时间或积累到一定量再批量物理删除和重建。
-        
+
         或者用支持原生删除的向量存储方案（如 Qdrant）。
         """
         old_count = len(self.records)
@@ -201,12 +201,12 @@ class VectorStore:
     def _rebuild_index(self):
         """
         从 records 重新构建 FAISS 索引。
-        
+
         【工作原理】
         1. 清空索引
         2. 把 records 中所有 embedding 拼成一个 numpy 矩阵
         3. 创建新的 IndexFlatL2 并 add 所有向量
-        
+
         【时间复杂度】
         O(N*d)，N = 向量数量，d = 维度。
         对于生产环境（百万级向量），这个操作可能需要数秒到数十秒。
@@ -224,11 +224,11 @@ class VectorStore:
     def _save(self):
         """
         把当前状态持久化到磁盘。
-        
+
         两个文件：
         - .index: FAISS 的 write_index 生成二进制文件
         - .data.json: Python 的 json.dump 生成 JSON 文件
-        
+
         【潜在的数据不一致风险】
         如果"写完 .index 成功"但"写 .data.json 失败"（比如磁盘满了），
         两个文件就不一致了。

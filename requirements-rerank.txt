@@ -1,0 +1,3 @@
+# CrossEncoder 精排（可选增强）——未安装时 rerank 模块自动降级为 RRF 排序，检索链路不受影响。
+# torch 在 Windows/Linux 的 pip 默认源即 CPU 可用版；加速安装走阿里/清华镜像。
+sentence-transformers>=2.7.0

@@ -1,20 +1,34 @@
 import hashlib
-import json
 import logging
 
-from app.config import TOP_K, MAX_HISTORY_MESSAGES
+from app.config import (
+    TOP_K, MAX_HISTORY_MESSAGES,
+    ENABLE_HYBRID, RETRIEVAL_CANDIDATES, RRF_K,
+    MIN_CHUNK_LENGTH, ENABLE_RERANK, RERANKER_MODEL, TOP_N_RERANK,
+)
 from app.models.db_models import Conversation, Message
+from app.services.retrieval.fusion import rrf_fuse
+from app.services.retrieval.quality import quality_filter
+from app.services.retrieval.rerank import cross_encoder_rerank
+from app.services.retrieval.validate import assess_answer
 
 logger = logging.getLogger(__name__)
 
 
 class RAGService:
-    def __init__(self, llm, vector_store, db):
+    def __init__(self, llm, vector_store, db, bm25_index=None):
         self.llm = llm
         self.vector_store = vector_store
         self.db = db
+        # bm25_index 为 None 时走 v1 纯向量路径——排障与回退兜底
+        self.bm25_index = bm25_index
 
     def retrieve(self, query: str, n_results: int = TOP_K) -> list[dict]:
+        if ENABLE_HYBRID and self.bm25_index is not None:
+            return self._retrieve_hybrid(query, n_results)
+        return self._retrieve_vector(query, n_results)
+
+    def _retrieve_vector(self, query: str, n_results: int) -> list[dict]:
         embedding = self.llm.embed(query)
         results = self.vector_store.search(embedding, n_results=n_results)
 
@@ -29,6 +43,31 @@ class RAGService:
                     "page": results["metadatas"][0][i].get("page"),
                 })
         return chunks
+
+    def _retrieve_hybrid(self, query: str, n_results: int) -> list[dict]:
+        """BM25+向量双路召回 → RRF 融合 → 质量过滤 → CrossEncoder 精排。"""
+        embedding = self.llm.embed(query)
+        vec_results = self.vector_store.search(
+            embedding, n_results=max(RETRIEVAL_CANDIDATES, n_results)
+        )
+        vector_chunks = []
+        if vec_results["ids"] and vec_results["ids"][0]:
+            for i in range(len(vec_results["ids"][0])):
+                vector_chunks.append({
+                    "id": vec_results["ids"][0][i],
+                    "text": vec_results["documents"][0][i] if vec_results["documents"] else "",
+                    "document_name": vec_results["metadatas"][0][i].get("document_name", ""),
+                    "chunk_index": vec_results["metadatas"][0][i].get("chunk_index", 0),
+                    "page": vec_results["metadatas"][0][i].get("page"),
+                })
+
+        bm25_chunks = self.bm25_index.search(query, top_n=RETRIEVAL_CANDIDATES)
+
+        fused = rrf_fuse(vector_chunks, bm25_chunks, k=RRF_K)
+        fused = quality_filter(fused, min_length=MIN_CHUNK_LENGTH)
+        if ENABLE_RERANK:
+            fused = cross_encoder_rerank(query, fused, top_n=TOP_N_RERANK, model_name=RERANKER_MODEL)
+        return fused[:n_results]
 
     def _build_messages(
         self,
@@ -117,19 +156,28 @@ class RAGService:
             for c in chunks
         ]
 
-        if not conversation_id or not user_id:
-            return {"answer": answer, "sources": sources, "conversation_id": ""}
+        # 无 user_id（未登录）：不落库，无法溯源到用户
+        if not user_id:
+            return {
+                "answer": answer,
+                "sources": sources,
+                "conversation_id": "",
+                "answer_confidence": assess_answer(answer, chunks),
+            }
 
-        conv = self.db.query(Conversation).filter(
-            Conversation.id == conversation_id,
-            Conversation.user_id == user_id,
-        ).first()
+        # 首次提问（无 conversation_id）也要建会话——schema 契约：返回会话 ID 供前端续写
+        conv = None
+        if conversation_id:
+            conv = self.db.query(Conversation).filter(
+                Conversation.id == conversation_id,
+                Conversation.user_id == user_id,
+            ).first()
         if not conv:
             conv = Conversation(title=question[:50], user_id=user_id)
             self.db.add(conv)
             self.db.commit()
             self.db.refresh(conv)
-            conversation_id = conv.id
+        conversation_id = conv.id
 
         user_msg = Message(
             conversation_id=conversation_id, role="user", content=question
@@ -147,4 +195,5 @@ class RAGService:
             "answer": answer,
             "sources": sources,
             "conversation_id": conversation_id,
+            "answer_confidence": assess_answer(answer, chunks),
         }

@@ -1,7 +1,7 @@
 # =============================================================================
 # config.py — 项目配置中心
 # =============================================================================
-# 
+#
 # 【这个文件在干什么】
 # 把散落在各处的配置（API密钥、文件路径、分块参数）集中到一个地方。
 # 这样做的好处：改配置只需要改这一个文件（或 .env），不用去业务代码里翻。
@@ -22,7 +22,7 @@ load_dotenv()
 # ---------------------------------------------------------------------------
 # LLM 配置
 # ---------------------------------------------------------------------------
-# 
+#
 # os.getenv("KEY", "默认值") — 第二个参数是 fallback：
 #   如果环境变量里有 KEY，就用它；没有就用默认值。
 #   这样就算 .env 文件丢了，程序也不会直接炸，会用默认值兜底。
@@ -90,6 +90,36 @@ TOP_K = int(os.getenv("TOP_K", "3"))
 #   设太小 → LLM 丢失前面的对话内容，回答不连贯。
 #   设为 0 可以禁用多轮对话记忆（退化为每次独立提问）。
 MAX_HISTORY_MESSAGES = int(os.getenv("MAX_HISTORY_MESSAGES", "10"))
+
+# ---------------------------------------------------------------------------
+# v2.0 混合检索配置 — BM25+向量双路 → RRF 融合 → CrossEncoder 精排
+# ---------------------------------------------------------------------------
+#
+# ENABLE_HYBRID: 总开关。false 时 retrieve() 走 v1 纯向量路径（排障兜底用）。
+ENABLE_HYBRID = os.getenv("ENABLE_HYBRID", "true").lower() == "true"
+
+# RETRIEVAL_CANDIDATES: 每路召回的候选块数。必须显著大于 TOP_K——
+# 融合和精排都在候选池上做，池子太小会让精排没有发挥空间。
+RETRIEVAL_CANDIDATES = int(os.getenv("RETRIEVAL_CANDIDATES", "20"))
+
+# RRF_K: 融合平滑常数。k 越大，排名差异带来的分差越小（越"平"）。
+# afac 实测扫描结论：10 在小候选集上区分度最好（顶分 1/(10+1)≈0.091）。
+RRF_K = int(os.getenv("RRF_K", "10"))
+
+# BM25_SCORE_THRESHOLD: BM25 腿的分数线。0 = 只要字面沾边就进候选池
+# （池子大小由 RETRIEVAL_CANDIDATES 控制，再由融合/精排淘汰）。
+BM25_SCORE_THRESHOLD = float(os.getenv("BM25_SCORE_THRESHOLD", "0.0"))
+
+# MIN_CHUNK_LENGTH: 候选块最小长度（字符）。碎片块 embedding 不可靠，
+# 喂给 LLM 只是噪声。afac 用 50，本项目块默认 500 字符，20 是宽松下限。
+MIN_CHUNK_LENGTH = int(os.getenv("MIN_CHUNK_LENGTH", "20"))
+
+# ENABLE_RERANK / RERANKER_MODEL / TOP_N_RERANK: CrossEncoder 精排。
+# bge-reranker-base 280MB（large 1.3GB 在 CPU 不可行，afac 实测结论）。
+# 未安装 sentence-transformers 时精排自动降级为 RRF 排序，服务不受影响。
+ENABLE_RERANK = os.getenv("ENABLE_RERANK", "true").lower() == "true"
+RERANKER_MODEL = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-base")
+TOP_N_RERANK = int(os.getenv("TOP_N_RERANK", "25"))
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/rag.db")
 

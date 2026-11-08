@@ -35,3 +35,9 @@ def root():
         "message": "RAG 知识库问答系统已启动 / RAG Knowledge Base Q&A is running",
         "docs": "/docs"
     }
+
+
+@app.get("/health")
+def health():
+    """存活探针：无鉴权、零依赖，供 Docker HEALTHCHECK 和负载均衡使用。"""
+    return {"status": "ok", "version": app.version}

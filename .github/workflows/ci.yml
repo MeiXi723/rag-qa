@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      # CI 不装 sentence-transformers（省 ~1GB torch）：精排走降级路径，单测全部 mock 化不受影响
+      ENABLE_RERANK: "false"
+      DEEPSEEK_API_KEY: "sk-ci-placeholder"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt ruff
+      - name: Lint
+        run: python -m ruff check app tests
+      - name: Test with coverage
+        run: python -m pytest --cov=app --cov-report=term-missing

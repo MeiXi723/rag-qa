@@ -5,7 +5,7 @@ from app.db.database import get_db
 from app.models.db_models import User
 from app.models.schemas import AskRequest, AskResponse
 from app.services.rag import RAGService
-from app.services import get_llm_service, get_vector_store
+from app.services import get_llm_service, get_vector_store, get_bm25_index
 from sqlalchemy.orm import Session
 
 router = APIRouter(prefix="/api/qa", tags=["智能问答 / Q&A"])
@@ -21,6 +21,7 @@ async def ask_question(
         llm=get_llm_service(),
         vector_store=get_vector_store(),
         db=db,
+        bm25_index=get_bm25_index(),
     )
 
     result = rag.ask(req.question, req.conversation_id, user_id=current_user.id)
@@ -29,4 +30,5 @@ async def ask_question(
         answer=result["answer"],
         sources=result["sources"],
         conversation_id=result["conversation_id"],
+        answer_confidence=result.get("answer_confidence"),
     )

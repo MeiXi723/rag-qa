@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, String, Integer, Text, ForeignKey, DateTime, JSON, CheckConstraint
+from sqlalchemy import Column, String, Integer, Text, ForeignKey, JSON, CheckConstraint
 from sqlalchemy.orm import DeclarativeBase, relationship
 
 

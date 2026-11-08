@@ -15,3 +15,8 @@ python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
 bcrypt==4.2.1
 redis==5.2.1
+# v2.0 混合检索：BM25 稀疏腿 + 中文分词
+rank-bm25==0.2.2
+jieba==0.42.1
+# 测试覆盖率（CI 用）
+pytest-cov==7.1.0

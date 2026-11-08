@@ -32,10 +32,10 @@ from pydantic import BaseModel, Field
 class SourceInfo(BaseModel):
     """
     一个引用来源的信息。
-    
+
     这是 RAG 系统区别于普通聊天机器人的关键数据结构——
     每个答案都可以追溯到具体的文档和段落。
-    
+
     【Field() 的作用】
     Field(description="...") 不会影响运行时行为（不会真的校验 description 对不对），
     它的作用是生成 API 文档——Swagger 页面会展示这些说明文字。
@@ -49,12 +49,12 @@ class SourceInfo(BaseModel):
 class AskRequest(BaseModel):
     """
     用户提问的请求格式。
-    
+
     【conversation_id 为什么是可选的？】
     因为两种使用场景：
     1. 新对话：用户不传 conversation_id → 系统自动创建新对话
     2. 续写对话：用户传了 conversation_id → 系统往已有对话里追加消息
-    
+
     【注意】当前项目虽然存了 conversation_id，
     但并没有真的把历史对话注入 LLM prompt——多轮对话是"假"的。
     这是第二阶段要修的问题。
@@ -69,21 +69,26 @@ class AskRequest(BaseModel):
 class AskResponse(BaseModel):
     """
     问答的响应格式。
-    
+
     三个字段分别承载：
     - answer: LLM 生成的回答正文
     - sources: 支撑这个回答的文档片段（可溯源）
     - conversation_id: 本次对话的 ID（前端可以用它来续写对话）
+    - answer_confidence: 答案置信度评估（v2.0 新增）
     """
     answer: str = Field(description="AI 生成的回答 / AI-generated answer")
     sources: list[SourceInfo] = Field(description="引用来源列表 / Source citations")
     conversation_id: str = Field(description="对话ID / Conversation ID")
+    answer_confidence: dict | None = Field(
+        default=None,
+        description='答案置信度 {"confidence": high|medium|low, "cited_sources": [n]} / Answer confidence',
+    )
 
 
 class DocumentResponse(BaseModel):
     """
     文档上传后的响应格式。
-    
+
     【id 是什么】
     uuid 的前 12 位十六进制字符（看 sqlite.py 的 _uid()）。
     不是数据库自增 ID——因为自增 ID 不安全（别人可以猜 ID），
@@ -108,7 +113,7 @@ class ConversationResponse(BaseModel):
 class MessageResponse(BaseModel):
     """
     单条消息的格式。
-    
+
     【sources 为什么是可选的？】
     只有 assistant 角色的消息才有 sources（AI 回答的引用）。
     user 角色的消息没有 sources。
@@ -126,7 +131,7 @@ class MessageResponse(BaseModel):
 class ErrorResponse(BaseModel):
     """
     统一的错误响应格式。
-    
+
     不管什么错误（文件格式不对、文档不存在、服务器内部故障），
     都返回同一个结构，前端只需要处理一个错误格式。
     """
